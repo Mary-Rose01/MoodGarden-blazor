@@ -1,0 +1,236 @@
+@page "/wall"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using System.Globalization
+@using System.Text.Json
+@inject IJSRuntime JS
+
+@{
+    var all = Feed;
+    var avg = all.Count == 0 ? 0 : all.Average(p => p.Paws);
+}
+
+<div class="flex flex-col gap-6 h-full">
+    <!-- Header -->
+    <div class="flex flex-col md:flex-row justify-between items-start md:items-center w-full gap-4">
+        <div class="flex flex-col gap-1.5">
+            <h2 class="font-display font-extrabold text-[28px] md:text-[32px] leading-tight text-brand-dark m-0">Vibe Wall</h2>
+            <p class="text-sm md:text-base text-brand-gray m-0">Rate the day with paws and leave a note for fellow gardeners.</p>
+        </div>
+        <a href="" class="flex items-center px-[18px] py-2.5 gap-2 bg-white border-2 border-brand-dark rounded-full font-bold text-sm text-brand-dark no-underline transition-colors duration-200 hover:bg-brand-green">
+            <span>←</span> Back to Garden
+        </a>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        <!-- LEFT: composer + summary -->
+        <div class="flex flex-col gap-6 lg:col-span-1">
+
+            <!-- Composer -->
+            <div class="flex flex-col p-6 gap-4 bg-white border-[3px] border-brand-dark shadow-pop rounded-3xl">
+                <h3 class="font-display font-bold text-xl text-brand-dark m-0">Leave your vibe 🌼</h3>
+
+                <input type="text" maxlength="24" @bind="author" @bind:event="oninput"
+                       placeholder="Your garden name (optional)"
+                       class="w-full px-4 py-2.5 bg-brand-light border-[2.5px] border-brand-dark rounded-full text-sm text-brand-dark placeholder:text-brand-gray focus:outline-none focus:bg-white focus:shadow-pop-sm" />
+
+                <!-- Mood -->
+                <div class="flex flex-col gap-2">
+                    <span class="font-bold text-xs uppercase tracking-wider text-brand-gray">Today's mood</span>
+                    <div class="flex flex-wrap gap-2">
+                        @foreach (var m in GardenState.Moods)
+                        {
+                            var sel = moodName == m.Name;
+                            <button type="button" title="@m.Name" aria-label="@m.Name" aria-pressed="@(sel ? "true" : "false")"
+                                    class="w-10 h-10 flex items-center justify-center text-xl border-2 border-brand-dark rounded-full transition-all hover:-translate-y-0.5 @(sel ? $"{m.Bg} shadow-pop-sm" : "bg-white")"
+                                    @onclick="() => moodName = m.Name">@m.Emoji</button>
+                        }
+                    </div>
+                </div>
+
+                <!-- Paw rating -->
+                <div class="flex flex-col gap-2">
+                    <span class="font-bold text-xs uppercase tracking-wider text-brand-gray">Rate with paws</span>
+                    <div class="flex items-center gap-1" role="radiogroup" aria-label="Paw rating" @onmouseleave="() => hover = 0">
+                        @foreach (var n in Enumerable.Range(1, 5))
+                        {
+                            var value = n;
+                            <button type="button" role="radio" aria-label="@value paws" aria-checked="@(paws == value ? "true" : "false")"
+                                    class="text-[34px] leading-none transition-all duration-150 hover:scale-125 @(value <= Shown ? "" : "grayscale opacity-30")"
+                                    @onmouseover="() => hover = value"
+                                    @onclick="() => paws = value">🐾</button>
+                        }
+                        <span class="ml-2 font-bold text-sm text-brand-dark">@PawLabel(Shown)</span>
+                    </div>
+                </div>
+
+                <!-- Comment -->
+                <div class="flex flex-col gap-1.5">
+                    <textarea rows="3" maxlength="200" @bind="text" @bind:event="oninput"
+                              placeholder="What's blooming in your day?"
+                              class="w-full px-4 py-3 bg-brand-light border-[2.5px] border-brand-dark rounded-2xl text-sm text-brand-dark placeholder:text-brand-gray resize-none focus:outline-none focus:bg-white focus:shadow-pop-sm"></textarea>
+                    <span class="self-end text-xs font-semibold text-brand-gray">@text.Length / 200</span>
+                </div>
+
+                @if (error is not null)
+                {
+                    <p class="m-0 px-4 py-2 bg-brand-coral/30 border-2 border-brand-dark rounded-xl text-sm font-bold text-brand-dark" role="alert">@error</p>
+                }
+
+                <button type="button" @onclick="PostVibe"
+                        class="w-full px-6 py-3 bg-brand-pink border-[2.5px] border-brand-dark rounded-full font-bold text-sm text-brand-dark shadow-pop transition-all hover:-translate-y-0.5 active:translate-y-0.5 active:shadow-none">
+                    🌱 Post to the wall
+                </button>
+            </div>
+
+            <!-- Summary -->
+            <div class="flex flex-col p-6 gap-4 bg-brand-yellow border-[3px] border-brand-dark shadow-pop rounded-3xl">
+                <div class="flex items-end justify-between">
+                    <div class="flex flex-col">
+                        <span class="font-bold text-xs uppercase tracking-wider text-brand-dark/70">Average paws</span>
+                        <span class="font-display font-extrabold text-4xl text-brand-dark">@avg.ToString("0.0", CultureInfo.InvariantCulture) 🐾</span>
+                    </div>
+                    <span class="font-bold text-sm text-brand-dark">@all.Count vibes</span>
+                </div>
+                <div class="flex flex-col gap-1.5">
+                    @foreach (var n in new[] { 5, 4, 3, 2, 1 })
+                    {
+                        var count = all.Count(p => p.Paws == n);
+                        var pct = all.Count == 0 ? 0 : (int)Math.Round(100.0 * count / all.Count);
+                        <div class="flex items-center gap-2 text-xs font-bold text-brand-dark">
+                            <span class="w-4">@n</span>
+                            <div class="flex-grow h-3 bg-white border-2 border-brand-dark rounded-full overflow-hidden">
+                                <div class="h-full bg-brand-green-dark transition-[width] duration-500" style="width:@(pct)%;"></div>
+                            </div>
+                            <span class="w-6 text-right">@count</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT: feed -->
+        <div class="flex flex-col gap-4 lg:col-span-2">
+            <div class="inline-flex self-start p-1 bg-white border-[2.5px] border-brand-dark rounded-full" role="group" aria-label="Sort">
+                <button type="button" class="px-4 py-1.5 rounded-full font-bold text-sm transition-colors @(sortTop ? "text-brand-dark hover:bg-brand-light" : "bg-brand-dark text-white")" @onclick="() => sortTop = false">🕒 Newest</button>
+                <button type="button" class="px-4 py-1.5 rounded-full font-bold text-sm transition-colors @(sortTop ? "bg-brand-dark text-white" : "text-brand-dark hover:bg-brand-light")" @onclick="() => sortTop = true">⭐ Top rated</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                @foreach (var (post, i) in all.Select((p, i) => (p, i)))
+                {
+                    var mood = GardenState.Find(post.MoodName);
+                    <div class="flex flex-col p-5 gap-3 bg-white border-[3px] border-brand-dark shadow-pop rounded-3xl transition-transform hover:-translate-y-1 animate-rise"
+                         style="animation-delay:@(Math.Min(i, 10) * 50)ms;">
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-3 min-w-0">
+                                <div class="flex shrink-0 justify-center items-center w-12 h-12 border-[2.5px] border-brand-dark rounded-full text-2xl @mood.Bg">@mood.Emoji</div>
+                                <div class="flex flex-col min-w-0">
+                                    <span class="font-display font-bold text-base text-brand-dark truncate">@post.Author</span>
+                                    <span class="font-bold text-[11px] uppercase tracking-wider text-brand-gray">@GardenState.TimeAgo(post.At)</span>
+                                </div>
+                            </div>
+                            @if (post.Mine)
+                            {
+                                <button type="button" aria-label="Delete your post" title="Delete"
+                                        class="shrink-0 w-8 h-8 flex items-center justify-center border-2 border-brand-dark rounded-full text-sm font-bold bg-white hover:bg-brand-coral transition-colors"
+                                        @onclick="() => DeleteAsync(post.Id)">✕</button>
+                            }
+                        </div>
+                        <div class="text-xl tracking-tight" aria-label="@post.Paws out of 5 paws">
+                            @foreach (var n in Enumerable.Range(1, 5))
+                            {
+                                <span class="@(n <= post.Paws ? "" : "grayscale opacity-25")">🐾</span>
+                            }
+                        </div>
+                        <p class="text-[15px] leading-relaxed text-brand-dark font-medium m-0 break-words">@post.Text</p>
+                        @if (post.Mine)
+                        {
+                            <span class="self-start px-3 py-0.5 bg-brand-green border-2 border-brand-dark rounded-full text-[11px] font-bold text-brand-dark">You</span>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string StorageKey = "cat-mood-garden:wall";
+
+    private record WallPost(Guid Id, string Author, string MoodName, int Paws, string Text, DateTime At, bool Mine);
+
+    // Sample posts so the wall never looks empty (not saved, never editable)
+    private readonly List<WallPost> seeds = new()
+    {
+        new(Guid.Parse("00000000-0000-0000-0000-000000000001"), "Mochi", "In Love", 5, "Found a sunbeam on the couch and refused to move for three hours. 10/10 day.", DateTime.UtcNow.AddMinutes(-25), false),
+        new(Guid.Parse("00000000-0000-0000-0000-000000000002"), "Miming", "Sleepy", 4, "Rainy afternoon, warm blanket, zero emails. Planted a very sleepy cat.", DateTime.UtcNow.AddHours(-3), false),
+        new(Guid.Parse("00000000-0000-0000-0000-000000000003"), "Kuya Tabby", "Sassy", 2, "Meeting could have been a message. Eye-roll emoji secured.", DateTime.UtcNow.AddHours(-9), false),
+        new(Guid.Parse("00000000-0000-0000-0000-000000000004"), "Nimbus", "Starry", 5, "Passed my exam! Feeling like a sparkly wizard cat.", DateTime.UtcNow.AddDays(-1), false),
+        new(Guid.Parse("00000000-0000-0000-0000-000000000005"), "Tala", "Sad", 3, "Missed the last jeepney but a stranger shared their umbrella. Small kindnesses.", DateTime.UtcNow.AddDays(-2), false),
+    };
+
+    private List<WallPost> mine = new();
+
+    private string author = "";
+    private string moodName = "Happy";
+    private string text = "";
+    private int paws;
+    private int hover;
+    private bool sortTop;
+    private string? error;
+
+    private int Shown => hover > 0 ? hover : paws;
+
+    private List<WallPost> Feed => (sortTop
+        ? seeds.Concat(mine).OrderByDescending(p => p.Paws).ThenByDescending(p => p.At)
+        : seeds.Concat(mine).OrderByDescending(p => p.At)).ToList();
+
+    private static string PawLabel(int n) => n switch
+    {
+        1 => "Meh",
+        2 => "Okay",
+        3 => "Nice",
+        4 => "Great",
+        5 => "Purrfect!",
+        _ => "Tap to rate"
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            var json = await JS.InvokeAsync<string?>("garden.load", StorageKey);
+            if (!string.IsNullOrEmpty(json))
+                mine = JsonSerializer.Deserialize<List<WallPost>>(json) ?? new();
+        }
+        catch { mine = new(); }
+        StateHasChanged();
+    }
+
+    private async Task PostVibe()
+    {
+        if (paws == 0) { error = "Pick a paw rating first 🐾"; return; }
+        if (string.IsNullOrWhiteSpace(text)) { error = "Write a little comment first ✍️"; return; }
+
+        error = null;
+        mine.Add(new WallPost(
+            Guid.NewGuid(),
+            string.IsNullOrWhiteSpace(author) ? "Anonymous cat" : author.Trim(),
+            moodName, paws, text.Trim(), DateTime.UtcNow, true));
+
+        await SaveAsync();
+        paws = 0;
+        hover = 0;
+        text = "";
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        mine.RemoveAll(p => p.Id == id);
+        await SaveAsync();
+    }
+
+    private Task SaveAsync() =>
+        JS.InvokeVoidAsync("garden.save", StorageKey, JsonSerializer.Serialize(mine)).AsTask();
+}
