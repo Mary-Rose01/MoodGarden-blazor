@@ -1,6 +1,9 @@
 @page "/diary"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using MoodGarden.Client.Models
+@using Supabase.Postgrest
 @inherits GardenPageBase
+@inject Supabase.Client Supabase
 
 <div class="flex flex-col gap-6 h-full">
     <div class="flex flex-col gap-1.5">
@@ -8,7 +11,11 @@
         <p class="text-sm md:text-base text-brand-gray m-0">A chronological memory lane of your planted feelings.</p>
     </div>
 
-    @if (Garden.Plantings.Count == 0)
+    @if (loading)
+    {
+        <div class="p-8 text-center font-bold text-brand-gray">Loading your garden diary... 🌱</div>
+    }
+    else if (plantings.Count == 0)
     {
         <div class="flex flex-col items-center justify-center flex-grow p-10 bg-white border-[3px] border-brand-dark shadow-pop-lg rounded-3xl text-center mt-4">
             <div class="text-[80px] mb-4 animate-bounce">🛌🐈</div>
@@ -20,8 +27,8 @@
     else
     {
         <div class="flex flex-wrap gap-2" role="group" aria-label="Filter by mood">
-            <button type="button" class="@ChipClass(null)" @onclick="() => filter = null">All · @Garden.Plantings.Count</button>
-            @foreach (var mood in GardenState.Moods.Where(m => Garden.Plantings.Any(p => p.MoodName == m.Name)))
+            <button type="button" class="@ChipClass(null)" @onclick="() => filter = null">All · @plantings.Count</button>
+            @foreach (var mood in GardenState.Moods.Where(m => plantings.Any(p => p.MoodName == m.Name)))
             {
                 <button type="button" class="@ChipClass(mood.Name)" @onclick="() => filter = mood.Name">@mood.Emoji @mood.Name</button>
             }
@@ -31,15 +38,42 @@
             @foreach (var (entry, i) in Entries.Select((e, i) => (e, i)))
             {
                 var mood = GardenState.Find(entry.MoodName);
+                var isEditing = editingId == entry.Id;
+
                 <div class="flex flex-col p-6 gap-4 bg-white border-[3px] border-brand-dark shadow-pop rounded-3xl transition-transform hover:-translate-y-1 animate-rise"
                      style="animation-delay:@(Math.Min(i, 12) * 50)ms;">
                     <div class="flex justify-between items-center w-full">
                         <div class="flex justify-center items-center w-14 h-14 border-[2.5px] border-brand-dark rounded-full text-[28px] @mood.Bg">@entry.Emoji</div>
-                        <div class="flex items-center justify-center px-4 py-1.5 border-2 border-brand-dark rounded-full font-bold text-xs text-brand-dark shadow-pop-sm @mood.Bg">@entry.MoodName</div>
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center justify-center px-4 py-1.5 border-2 border-brand-dark rounded-full font-bold text-xs text-brand-dark shadow-pop-sm @mood.Bg">@entry.MoodName</div>
+                            <button type="button" title="Edit note" disabled="@saving"
+                                    class="w-8 h-8 flex items-center justify-center border-2 border-brand-dark rounded-full text-xs bg-white hover:bg-brand-yellow disabled:opacity-50"
+                                    @onclick="() => StartEdit(entry)">✏️</button>
+                            <button type="button" title="Delete entry" disabled="@saving"
+                                    class="w-8 h-8 flex items-center justify-center border-2 border-brand-dark rounded-full text-xs font-bold bg-white hover:bg-brand-coral disabled:opacity-50"
+                                    @onclick="() => SoftDeleteAsync(entry.Id)">✕</button>
+                        </div>
                     </div>
+
                     <div class="flex flex-col gap-2 mt-2">
                         <span class="font-bold text-[11px] uppercase tracking-wider text-brand-gray">@GardenState.TimeAgo(entry.At)</span>
-                        @if (string.IsNullOrWhiteSpace(entry.Note))
+
+                        @if (isEditing)
+                        {
+                            <textarea rows="2" maxlength="120" @bind="editNote"
+                                      class="w-full px-3 py-2 bg-brand-light border-2 border-brand-dark rounded-xl text-sm text-brand-dark focus:outline-none focus:bg-white"></textarea>
+                            <div class="flex gap-2">
+                                <button type="button" disabled="@saving"
+                                        class="px-4 py-1.5 bg-brand-green border-2 border-brand-dark rounded-full font-bold text-xs text-brand-dark disabled:opacity-50"
+                                        @onclick="() => SaveEditAsync(entry)">
+                                    @(saving ? "Saving..." : "Save")
+                                </button>
+                                <button type="button" disabled="@saving"
+                                        class="px-4 py-1.5 bg-white border-2 border-brand-dark rounded-full font-bold text-xs text-brand-dark"
+                                        @onclick="() => editingId = null">Cancel</button>
+                            </div>
+                        }
+                        else if (string.IsNullOrWhiteSpace(entry.Note))
                         {
                             <p class="text-[15px] leading-relaxed text-brand-gray italic m-0">No note, just vibes 🌿</p>
                         }
@@ -55,11 +89,93 @@
 </div>
 
 @code {
+    private List<Planting> plantings = new();
     private string? filter;
+    private bool loading = true;
+    private bool saving = false;
 
-    private IEnumerable<Planting> Entries => Garden.Plantings
+    private Guid? editingId;
+    private string editNote = "";
+
+    private IEnumerable<Planting> Entries => plantings
         .OrderByDescending(p => p.At)
         .Where(p => filter is null || p.MoodName == filter);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadEntriesAsync();
+    }
+
+    private async Task LoadEntriesAsync()
+    {
+        loading = true;
+        try
+        {
+            var response = await Supabase
+                .From<Planting>()
+                .Where(x => x.DeletedAt == null)
+                .Order("at", Constants.Ordering.Descending)
+                .Get();
+
+            plantings = response.Models;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private void StartEdit(Planting entry)
+    {
+        editingId = entry.Id;
+        editNote = entry.Note ?? "";
+    }
+
+    private async Task SaveEditAsync(Planting entry)
+    {
+        if (saving) return;
+        saving = true;
+        try
+        {
+            var cleaned = string.IsNullOrWhiteSpace(editNote) ? null : editNote.Trim();
+            var now = DateTime.UtcNow;
+
+            await Supabase
+                .From<Planting>()
+                .Where(x => x.Id == entry.Id)
+                .Set(x => x.Note, cleaned)
+                .Set(x => x.UpdatedAt, now)
+                .Update();
+
+            entry.Note = cleaned;
+            entry.UpdatedAt = now;
+            editingId = null;
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task SoftDeleteAsync(Guid id)
+    {
+        if (saving) return;
+        saving = true;
+        try
+        {
+            await Supabase
+                .From<Planting>()
+                .Where(x => x.Id == id)
+                .Set(x => x.DeletedAt, DateTime.UtcNow)
+                .Update();
+
+            plantings.RemoveAll(p => p.Id == id);
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
 
     private string ChipClass(string? name) =>
         "px-4 py-1.5 border-2 border-brand-dark rounded-full font-bold text-sm transition-all " +

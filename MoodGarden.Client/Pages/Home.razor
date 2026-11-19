@@ -1,14 +1,17 @@
 ﻿@page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using MoodGarden.Client.Models
+@using Supabase.Postgrest
 @inherits GardenPageBase
+@inject Supabase.Client Supabase
 @inject IJSRuntime JS
 
-@{ var recent = Garden.Recent; }
+@{ var recent = plantings.Where(p => p.At >= DateTime.UtcNow.AddHours(-24)).ToList(); }
 
 <div class="flex flex-col h-full -m-6 md:-m-10">
     <!-- Canvas -->
     <div @ref="canvas" @onclick="PlantCat"
-         class="relative flex-grow min-h-[340px] bg-linear-to-br @SkyClass border-b-[3px] border-brand-dark overflow-hidden cursor-pointer">
+         class="relative flex-grow min-h-[340px] bg-linear-to-br @SkyClass border-b-[3px] border-brand-dark overflow-hidden @(saving ? "cursor-wait" : "cursor-pointer")">
 
         <!-- Sun / Moon -->
         <div class="pointer-events-none select-none absolute top-28 md:top-6 right-6 text-[44px] animate-bob">@(IsNight ? "🌙" : "☀️")</div>
@@ -22,14 +25,14 @@
         <div class="pointer-events-none absolute w-[150%] md:w-[900px] h-[300px] md:h-[400px] -left-[10%] md:-left-[200px] -bottom-[100px] md:top-[280px] bg-brand-green-dark border-[3px] border-brand-dark rounded-[100%] md:rounded-full"></div>
         <div class="pointer-events-none absolute w-[150%] md:w-[1000px] h-[350px] md:h-[450px] -right-[20%] md:left-[450px] -bottom-[50px] md:top-[250px] bg-brand-green border-[3px] border-brand-dark rounded-[100%] md:rounded-full"></div>
 
-        <!-- Hint (fades after first planting) -->
+        <!-- Hint -->
         <div class="pointer-events-none absolute left-1/2 -translate-x-1/2 top-5 z-[2000] flex items-center justify-center gap-2 px-6 py-3 bg-white border-[2.5px] border-brand-dark shadow-pop rounded-2xl font-bold text-sm text-brand-dark text-center w-[90%] md:w-auto transition-opacity duration-500 @(recent.Any() ? "opacity-0" : "opacity-100")">
             💡 Tap anywhere in the garden to plant your mood!
         </div>
 
         <!-- Counter -->
         <div class="pointer-events-none absolute bottom-4 left-4 z-[2000] px-4 py-2 bg-white border-2 border-brand-dark rounded-full shadow-pop-sm font-bold text-xs text-brand-dark">
-            🌱 @recent.Count planted in the last 24h
+            @(saving ? "🌱 Planting..." : $"🌱 {recent.Count} planted in the last 24h")
         </div>
 
         <!-- Planted cats -->
@@ -58,25 +61,28 @@
             {
                 var selected = selectedName == mood.Name;
                 <button type="button"
+                        disabled="@saving"
                         aria-pressed="@(selected ? "true" : "false")"
-                        class="flex flex-col items-center justify-center w-16 h-[68px] md:w-[72px] md:h-[76px] border-[2.5px] border-brand-dark rounded-2xl transition-all duration-100 hover:-translate-y-1 hover:shadow-pop active:translate-y-0.5 active:shadow-none @(selected ? $"{mood.Bg} shadow-pop -translate-y-1" : "bg-white")"
+                        class="flex flex-col items-center justify-center w-16 h-[68px] md:w-[72px] md:h-[76px] border-[2.5px] border-brand-dark rounded-2xl transition-all duration-100 hover:-translate-y-1 hover:shadow-pop active:translate-y-0.5 active:shadow-none disabled:opacity-60 @(selected ? $"{mood.Bg} shadow-pop -translate-y-1" : "bg-white")"
                         @onclick="() => selectedName = mood.Name">
                     <span class="text-[24px] md:text-[28px]">@mood.Emoji</span>
                     <span class="text-[10px] md:text-[11px] font-bold text-brand-dark mt-1">@mood.Name</span>
                 </button>
             }
         </div>
-        <input type="text" maxlength="120" @bind="note" @bind:event="oninput"
+        <input type="text" maxlength="120" @bind="note" @bind:event="oninput" disabled="@saving"
                placeholder="Add a little note for your diary (optional)…"
-               class="w-full max-w-xl px-5 py-2.5 bg-brand-light border-[2.5px] border-brand-dark rounded-full text-sm text-brand-dark placeholder:text-brand-gray focus:outline-none focus:bg-white focus:shadow-pop-sm" />
+               class="w-full max-w-xl px-5 py-2.5 bg-brand-light border-[2.5px] border-brand-dark rounded-full text-sm text-brand-dark placeholder:text-brand-gray focus:outline-none focus:bg-white focus:shadow-pop-sm disabled:opacity-60" />
     </div>
 </div>
 
 @code {
     private ElementReference canvas;
+    private List<Planting> plantings = new();
     private string selectedName = "Happy";
     private string note = "";
     private int hour = 12;
+    private bool saving = false;
 
     private record Rect(double Left, double Top, double Width, double Height);
 
@@ -91,6 +97,11 @@
 
     private static int Delay(Planting p) => Math.Abs(p.Id.GetHashCode()) % 3000;
 
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPlantingsAsync();
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         await base.OnAfterRenderAsync(firstRender);
@@ -99,20 +110,50 @@
         StateHasChanged();
     }
 
+    private async Task LoadPlantingsAsync()
+    {
+        var response = await Supabase
+            .From<Planting>()
+            .Where(x => x.DeletedAt == null)
+            .Order("at", Constants.Ordering.Descending)
+            .Get();
+
+        plantings = response.Models;
+    }
+
     private async Task PlantCat(MouseEventArgs e)
     {
-        // Measure the real canvas instead of hardcoding 1440x804
+        if (saving) return;
+
         var r = await JS.InvokeAsync<Rect>("garden.getRect", canvas);
         if (r.Width <= 0 || r.Height <= 0) return;
 
-        var x = Math.Clamp((e.ClientX - r.Left) / r.Width * 100, 4, 96);
-        var y = Math.Clamp((e.ClientY - r.Top) / r.Height * 100, 14, 100);
-        var mood = GardenState.Find(selectedName);
+        saving = true;
+        try
+        {
+            var x = Math.Clamp((e.ClientX - r.Left) / r.Width * 100, 4, 96);
+            var y = Math.Clamp((e.ClientY - r.Top) / r.Height * 100, 14, 100);
+            var mood = GardenState.Find(selectedName);
 
-        await Garden.AddAsync(new Planting(
-            Guid.NewGuid(), mood.Emoji, mood.Name, x, y, DateTime.UtcNow,
-            string.IsNullOrWhiteSpace(note) ? null : note.Trim()));
+            var newPlanting = new Planting
+            {
+                Emoji = mood.Emoji,
+                MoodName = mood.Name,
+                X = x,
+                Y = y,
+                At = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+                Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim()
+            };
 
-        note = "";
+            var response = await Supabase.From<Planting>().Insert(newPlanting);
+            var created = response.Models.FirstOrDefault() ?? newPlanting;
+            plantings.Insert(0, created);
+            note = "";
+        }
+        finally
+        {
+            saving = false;
+        }
     }
 }
