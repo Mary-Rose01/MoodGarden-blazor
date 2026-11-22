@@ -1,0 +1,73 @@
+@page "/achievements"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using System.Globalization
+@using MoodGarden.Client.Models
+@using MoodGarden.Client.Services
+@inject PlantingService Plantings
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="row" style="margin-bottom:14px">
+    <a class="btn s" href="settings">⚙️ General</a>
+    <a class="btn s" href="profile">🐾 Profile</a>
+    <a class="btn s p" href="achievements">🏆 Achievements</a>
+    <a class="btn s" href="customize">🎨 Customize</a>
+</div>
+
+<h1>Achievements 🏆</h1>
+<p class="mut">Gentle milestones — not a competition.</p>
+
+<div class="g">
+    @foreach (var a in GardenState.AchievementDefs)
+    {
+        var val = GardenState.AchievementProgress(a, plantings);
+        var unlocked = val >= a.Target;
+        var pct = Math.Min(100, val * 100.0 / a.Target).ToString("0.##", CultureInfo.InvariantCulture);
+
+        <div class="card @(unlocked ? "" : "lock")"
+             style="cursor:pointer;background:@(unlocked ? "var(--yl);color:#1E1E1E" : "var(--sf)")"
+             @onclick="() => selected = a">
+            <h3>@(unlocked ? "🏆" : "🔒") @a.Title</h3>
+            <p class="mut">@a.Description</p>
+            <div class="bar"><i style="width:@(pct)%"></i></div>
+            <small>@Math.Min(val, a.Target)/@a.Target</small>
+        </div>
+    }
+</div>
+
+@if (selected is not null)
+{
+    var val = GardenState.AchievementProgress(selected, plantings);
+    var unlocked = val >= selected.Target;
+    var pct = Math.Min(100, val * 100.0 / selected.Target).ToString("0.##", CultureInfo.InvariantCulture);
+
+    <div class="ov" @onclick="() => selected = null">
+        <div class="card md" @onclick:stopPropagation>
+            <h2>@(unlocked ? "🏆" : "🔒") @selected.Title</h2>
+            <p>@selected.Description</p>
+            <div class="bar"><i style="width:@(pct)%"></i></div>
+            <p class="mut">@Math.Min(val, selected.Target)/@selected.Target</p>
+            <button type="button" class="btn" @onclick="() => selected = null">Close</button>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Planting> plantings = new();
+    private AchievementDef? selected;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
+        try
+        {
+            await Profiles.GetOrCreateProfileAsync();
+            plantings = await Plantings.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load achievements: {ex.Message}");
+        }
+    }
+}

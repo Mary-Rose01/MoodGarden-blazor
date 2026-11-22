@@ -15,6 +15,9 @@ public class WallPost : BaseModel
     [Column("author")]
     public string Author { get; set; } = "Anonymous cat";
 
+    [Column("avatar_emoji")]
+    public string AvatarEmoji { get; set; } = "🐱";
+
     [Column("mood_name")]
     public string MoodName { get; set; } = "Happy";
 

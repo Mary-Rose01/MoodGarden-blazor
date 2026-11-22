@@ -1,0 +1,134 @@
+@page "/settings"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using MoodGarden.Client.Models
+@using MoodGarden.Client.Services
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="row" style="margin-bottom:14px">
+    <a class="btn s p" href="settings">⚙️ General</a>
+    <a class="btn s" href="profile">🐾 Profile</a>
+    <a class="btn s" href="achievements">🏆 Achievements</a>
+    <a class="btn s" href="customize">🎨 Customize</a>
+</div>
+
+<h1>Settings ⚙️</h1>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
+
+<div class="card">
+    <h3>Appearance</h3>
+    <button type="button" class="btn s" disabled="@saving" @onclick="ToggleNightAsync">
+        Garden: @(profile.NightMode ? "Night" : "Day") (toggle)
+    </button>
+</div>
+
+<div class="card">
+    <h3>Notifications</h3>
+    <button type="button" class="btn s" disabled="@saving" @onclick="ToggleRemindersAsync">
+        Reminders: @(profile.RemindersEnabled ? "On" : "Off")
+    </button>
+</div>
+
+<div class="card">
+    <h3>Privacy</h3>
+    <p style="margin-bottom:0">🔒 Diary entries are private by default. Only Vibe Wall posts are shared.</p>
+</div>
+
+<div class="card">
+    <h3>Account</h3>
+    @if (Auth.IsSignedIn)
+    {
+        <p class="mut">Signed in as <b>@Auth.Email</b></p>
+        <div class="row">
+            <a class="btn s" href="profile">Edit profile</a>
+            <button type="button" class="btn s" @onclick="LogoutAsync">Log Out</button>
+        </div>
+    }
+    else
+    {
+        <div class="row">
+            <a class="btn s p" href="login">🔑 Log In</a>
+            <a class="btn s" href="register">🌱 Register</a>
+            <a class="btn s" href="profile">Edit profile</a>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(toastMsg))
+{
+    <div id="t"><div class="ts">@toastMsg</div></div>
+}
+
+@code {
+    private UserProfile profile = new();
+    private bool saving;
+    private string? error;
+    private string? toastMsg;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
+        profile = await Profiles.GetOrCreateProfileAsync();
+    }
+
+    private async Task ToggleNightAsync()
+    {
+        saving = true;
+        error = null;
+        try
+        {
+            profile.NightMode = !profile.NightMode;
+            profile = await Profiles.SaveProfileAsync(profile);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not save appearance: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ToggleRemindersAsync()
+    {
+        saving = true;
+        error = null;
+        try
+        {
+            profile.RemindersEnabled = !profile.RemindersEnabled;
+            profile = await Profiles.SaveProfileAsync(profile);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not save reminders: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task LogoutAsync()
+    {
+        await Auth.SignOutAsync();
+        Nav.NavigateTo("login", replace: true);
+    }
+
+    private async Task ShowToastAsync(string msg)
+    {
+        toastMsg = msg;
+        StateHasChanged();
+        await Task.Delay(3200);
+        if (toastMsg == msg)
+        {
+            toastMsg = null;
+            StateHasChanged();
+        }
+    }
+}

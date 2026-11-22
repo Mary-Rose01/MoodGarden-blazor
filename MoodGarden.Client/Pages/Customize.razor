@@ -1,0 +1,141 @@
+@page "/customize"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using MoodGarden.Client.Models
+@using MoodGarden.Client.Services
+@inject ProfileService Profiles
+@inject PlantingService Plantings
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="row" style="margin-bottom:14px">
+    <a class="btn s" href="settings">⚙️ General</a>
+    <a class="btn s" href="profile">🐾 Profile</a>
+    <a class="btn s" href="achievements">🏆 Achievements</a>
+    <a class="btn s p" href="customize">🎨 Customize</a>
+</div>
+
+<h1>Customize Garden 🎨</h1>
+<p class="mut">Unlock items by growing your garden. Equipped items appear on Home.</p>
+
+<div class="row" style="margin:10px 0">
+    <button type="button" class="btn" disabled="@saving" @onclick="ToggleNightAsync">
+        @(profile.NightMode ? "☀️ Day sky" : "🌙 Night sky")
+    </button>
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
+
+@{
+    var streakDays = GardenState.CalculateStreak(plantings);
+    var equipped = ProfileService.ParseEquipped(profile);
+}
+
+<div class="g">
+    @foreach (var item in GardenState.Decorations)
+    {
+        var current = item.RequirementType == "cats" ? plantings.Count : streakDays;
+        var unlocked = current >= item.RequiredCount;
+        var isEquipped = equipped.Contains(item.Emoji);
+
+        <div class="card @(unlocked ? "" : "lock")">
+            <div style="font-size:40px">@item.Emoji</div>
+            <b>@item.Name</b>
+            <p class="mut">@(unlocked ? "Unlocked" : $"Needs {item.RequiredCount} {(item.RequirementType == "cats" ? "cats" : "-day streak")}")</p>
+            <button type="button" class="btn s @(isEquipped ? "p" : "")" disabled="@saving" @onclick="() => ToggleEquipAsync(item, unlocked)">
+                @(unlocked ? (isEquipped ? "Unequip" : "Equip") : "Locked")
+            </button>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(toastMsg))
+{
+    <div id="t"><div class="ts">@toastMsg</div></div>
+}
+
+@code {
+    private UserProfile profile = new();
+    private List<Planting> plantings = new();
+    private bool saving;
+    private string? error;
+    private string? toastMsg;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
+        try
+        {
+            profile = await Profiles.GetOrCreateProfileAsync();
+            plantings = await Plantings.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not load customization: {ex.Message}";
+        }
+    }
+
+    private async Task ToggleNightAsync()
+    {
+        saving = true;
+        error = null;
+        try
+        {
+            profile.NightMode = !profile.NightMode;
+            profile = await Profiles.SaveProfileAsync(profile);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not save theme: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ToggleEquipAsync(DecorationItem item, bool unlocked)
+    {
+        if (!unlocked)
+        {
+            await ShowToastAsync($"Locked: {item.RequiredCount} {(item.RequirementType == "cats" ? "cats" : "day streak")} needed");
+            return;
+        }
+
+        saving = true;
+        error = null;
+        try
+        {
+            var eq = ProfileService.ParseEquipped(profile);
+            if (eq.Contains(item.Emoji))
+                eq.Remove(item.Emoji);
+            else
+                eq.Add(item.Emoji);
+
+            ProfileService.SetEquipped(profile, eq);
+            profile = await Profiles.SaveProfileAsync(profile);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not update decoration: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ShowToastAsync(string msg)
+    {
+        toastMsg = msg;
+        StateHasChanged();
+        await Task.Delay(3200);
+        if (toastMsg == msg)
+        {
+            toastMsg = null;
+            StateHasChanged();
+        }
+    }
+}

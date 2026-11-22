@@ -1,248 +1,171 @@
 @page "/wall"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
-@using System.Globalization
 @using MoodGarden.Client.Models
-@using Supabase.Postgrest
-@inject Supabase.Client Supabase
-@inject IJSRuntime JS
+@using MoodGarden.Client.Services
+@inject WallService Walls
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
 
-@{
-    var all = Feed;
-    var avg = all.Count == 0 ? 0 : all.Average(p => p.Paws);
-}
+<h1>Vibe Wall 💬</h1>
 
-<div class="flex flex-col gap-6 h-full">
-    <div class="flex flex-col md:flex-row justify-between items-start md:items-center w-full gap-4">
-        <div class="flex flex-col gap-1.5">
-            <h2 class="font-display font-extrabold text-[28px] md:text-[32px] leading-tight text-brand-dark m-0">Vibe Wall</h2>
-            <p class="text-sm md:text-base text-brand-gray m-0">Rate the day with paws and leave a note for fellow gardeners.</p>
-        </div>
-        <a href="" class="flex items-center px-[18px] py-2.5 gap-2 bg-white border-2 border-brand-dark rounded-full font-bold text-sm text-brand-dark no-underline transition-colors duration-200 hover:bg-brand-green">
-            <span>←</span> Back to Garden
-        </a>
+<div class="card">
+    <div class="row">
+        <select class="mg-in" @bind="moodKey">
+            @foreach (var m in GardenState.Moods)
+            {
+                <option value="@m.Key">@m.Emoji @m.Name</option>
+            }
+        </select>
+        <select class="mg-in" @bind="paws">
+            @for (var n = 1; n <= 5; n++)
+            {
+                <option value="@n">@string.Concat(Enumerable.Repeat("🐾", n))</option>
+            }
+        </select>
     </div>
-
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-        <!-- LEFT: composer + summary -->
-        <div class="flex flex-col gap-6 lg:col-span-1">
-            <div class="flex flex-col p-6 gap-4 bg-white border-[3px] border-brand-dark shadow-pop rounded-3xl">
-                <h3 class="font-display font-bold text-xl text-brand-dark m-0">Leave your vibe 🌼</h3>
-
-                <input type="text" maxlength="24" @bind="author" @bind:event="oninput" disabled="@saving"
-                       placeholder="Your garden name (optional)"
-                       class="w-full px-4 py-2.5 bg-brand-light border-[2.5px] border-brand-dark rounded-full text-sm text-brand-dark placeholder:text-brand-gray focus:outline-none focus:bg-white focus:shadow-pop-sm disabled:opacity-60" />
-
-                <div class="flex flex-col gap-2">
-                    <span class="font-bold text-xs uppercase tracking-wider text-brand-gray">Today's mood</span>
-                    <div class="flex flex-wrap gap-2">
-                        @foreach (var m in GardenState.Moods)
-                        {
-                            var sel = moodName == m.Name;
-                            <button type="button" title="@m.Name" aria-label="@m.Name" aria-pressed="@(sel ? "true" : "false")" disabled="@saving"
-                                    class="w-10 h-10 flex items-center justify-center text-xl border-2 border-brand-dark rounded-full transition-all hover:-translate-y-0.5 @(sel ? $"{m.Bg} shadow-pop-sm" : "bg-white")"
-                                    @onclick="() => moodName = m.Name">@m.Emoji</button>
-                        }
-                    </div>
-                </div>
-
-                <div class="flex flex-col gap-2">
-                    <span class="font-bold text-xs uppercase tracking-wider text-brand-gray">Rate with paws</span>
-                    <div class="flex items-center gap-1" role="radiogroup" aria-label="Paw rating" @onmouseleave="() => hover = 0">
-                        @foreach (var n in Enumerable.Range(1, 5))
-                        {
-                            var value = n;
-                            <button type="button" role="radio" aria-label="@value paws" aria-checked="@(paws == value ? "true" : "false")" disabled="@saving"
-                                    class="text-[34px] leading-none transition-all duration-150 hover:scale-125 @(value <= Shown ? "" : "grayscale opacity-30")"
-                                    @onmouseover="() => hover = value"
-                                    @onclick="() => paws = value">🐾</button>
-                        }
-                        <span class="ml-2 font-bold text-sm text-brand-dark">@PawLabel(Shown)</span>
-                    </div>
-                </div>
-
-                <div class="flex flex-col gap-1.5">
-                    <textarea rows="3" maxlength="200" @bind="text" @bind:event="oninput" disabled="@saving"
-                              placeholder="What's blooming in your day?"
-                              class="w-full px-4 py-3 bg-brand-light border-[2.5px] border-brand-dark rounded-2xl text-sm text-brand-dark placeholder:text-brand-gray resize-none focus:outline-none focus:bg-white focus:shadow-pop-sm disabled:opacity-60"></textarea>
-                    <span class="self-end text-xs font-semibold text-brand-gray">@text.Length / 200</span>
-                </div>
-
-                @if (error is not null)
-                {
-                    <p class="m-0 px-4 py-2 bg-brand-coral/30 border-2 border-brand-dark rounded-xl text-sm font-bold text-brand-dark" role="alert">@error</p>
-                }
-
-                <button type="button" disabled="@saving" @onclick="PostVibeAsync"
-                        class="w-full px-6 py-3 bg-brand-pink border-[2.5px] border-brand-dark rounded-full font-bold text-sm text-brand-dark shadow-pop transition-all hover:-translate-y-0.5 active:translate-y-0.5 active:shadow-none disabled:opacity-50 disabled:cursor-not-allowed">
-                    @(saving ? "🌱 Posting..." : "🌱 Post to the wall")
-                </button>
-            </div>
-
-            <!-- Summary -->
-            <div class="flex flex-col p-6 gap-4 bg-brand-yellow border-[3px] border-brand-dark shadow-pop rounded-3xl">
-                <div class="flex items-end justify-between">
-                    <div class="flex flex-col">
-                        <span class="font-bold text-xs uppercase tracking-wider text-brand-dark/70">Average paws</span>
-                        <span class="font-display font-extrabold text-4xl text-brand-dark">@avg.ToString("0.0", CultureInfo.InvariantCulture) 🐾</span>
-                    </div>
-                    <span class="font-bold text-sm text-brand-dark">@all.Count vibes</span>
-                </div>
-                <div class="flex flex-col gap-1.5">
-                    @foreach (var n in new[] { 5, 4, 3, 2, 1 })
-                    {
-                        var count = all.Count(p => p.Paws == n);
-                        var pct = all.Count == 0 ? 0 : (int)Math.Round(100.0 * count / all.Count);
-                        <div class="flex items-center gap-2 text-xs font-bold text-brand-dark">
-                            <span class="w-4">@n</span>
-                            <div class="flex-grow h-3 bg-white border-2 border-brand-dark rounded-full overflow-hidden">
-                                <div class="h-full bg-brand-green-dark transition-[width] duration-500" style="width:@(pct)%;"></div>
-                            </div>
-                            <span class="w-6 text-right">@count</span>
-                        </div>
-                    }
-                </div>
-            </div>
-        </div>
-
-        <!-- RIGHT: feed -->
-        <div class="flex flex-col gap-4 lg:col-span-2">
-            <div class="inline-flex self-start p-1 bg-white border-[2.5px] border-brand-dark rounded-full" role="group" aria-label="Sort">
-                <button type="button" class="px-4 py-1.5 rounded-full font-bold text-sm transition-colors @(sortTop ? "text-brand-dark hover:bg-brand-light" : "bg-brand-dark text-white")" @onclick="() => sortTop = false">🕒 Newest</button>
-                <button type="button" class="px-4 py-1.5 rounded-full font-bold text-sm transition-colors @(sortTop ? "bg-brand-dark text-white" : "text-brand-dark hover:bg-brand-light")" @onclick="() => sortTop = true">⭐ Top rated</button>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
-                @foreach (var (post, i) in all.Select((p, i) => (p, i)))
-                {
-                    var mood = GardenState.Find(post.MoodName);
-                    var isMine = !string.IsNullOrEmpty(clientId) && post.ClientId == clientId;
-
-                    <div class="flex flex-col p-5 gap-3 bg-white border-[3px] border-brand-dark shadow-pop rounded-3xl transition-transform hover:-translate-y-1 animate-rise"
-                         style="animation-delay:@(Math.Min(i, 10) * 50)ms;">
-                        <div class="flex items-center justify-between gap-3">
-                            <div class="flex items-center gap-3 min-w-0">
-                                <div class="flex shrink-0 justify-center items-center w-12 h-12 border-[2.5px] border-brand-dark rounded-full text-2xl @mood.Bg">@mood.Emoji</div>
-                                <div class="flex flex-col min-w-0">
-                                    <span class="font-display font-bold text-base text-brand-dark truncate">@post.Author</span>
-                                    <span class="font-bold text-[11px] uppercase tracking-wider text-brand-gray">@GardenState.TimeAgo(post.At)</span>
-                                </div>
-                            </div>
-                            @if (isMine)
-                            {
-                                <button type="button" aria-label="Delete your post" title="Delete" disabled="@saving"
-                                        class="shrink-0 w-8 h-8 flex items-center justify-center border-2 border-brand-dark rounded-full text-sm font-bold bg-white hover:bg-brand-coral transition-colors disabled:opacity-50"
-                                        @onclick="() => SoftDeleteAsync(post.Id)">✕</button>
-                            }
-                        </div>
-                        <div class="text-xl tracking-tight" aria-label="@post.Paws out of 5 paws">
-                            @foreach (var n in Enumerable.Range(1, 5))
-                            {
-                                <span class="@(n <= post.Paws ? "" : "grayscale opacity-25")">🐾</span>
-                            }
-                        </div>
-                        <p class="text-[15px] leading-relaxed text-brand-dark font-medium m-0 break-words">@post.Text</p>
-                        @if (isMine)
-                        {
-                            <span class="self-start px-3 py-0.5 bg-brand-green border-2 border-brand-dark rounded-full text-[11px] font-bold text-brand-dark">You</span>
-                        }
-                    </div>
-                }
-            </div>
-        </div>
-    </div>
+    <textarea class="mg-in" rows="2" maxlength="240" style="margin:8px 0" @bind="text" placeholder="Share how you feel…"></textarea>
+    <button type="button" class="btn p" disabled="@saving" @onclick="PostAsync">@(saving ? "Posting..." : "Post")</button>
 </div>
 
+<div class="row" style="margin-bottom:12px">
+    <select class="mg-in" style="max-width:220px" @bind="filter">
+        <option value="recent">Recent</option>
+        <option value="top">Most supported</option>
+        @foreach (var m in GardenState.Moods)
+        {
+            <option value="@m.Key">@m.Emoji @m.Name</option>
+        }
+    </select>
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
+
+@if (!Feed.Any())
+{
+    <div class="card">No posts for this filter yet.</div>
+}
+else
+{
+    @foreach (var p in Feed)
+    {
+        var m = GardenState.Find(p.MoodName);
+        var myReaction = reactions.FirstOrDefault(r => r.PostId == p.Id && r.ClientId == clientId)?.Reaction;
+
+        <div class="card">
+            <div class="row">
+                <span style="font-size:28px">@(string.IsNullOrWhiteSpace(p.AvatarEmoji) ? "🐱" : p.AvatarEmoji)</span>
+                <b>@p.Author</b>
+                <span class="pill" style="background:@m.ColorHex">@m.Emoji @m.Name</span>
+                <span>@string.Concat(Enumerable.Repeat("🐾", Math.Clamp(p.Paws, 1, 5)))</span>
+                <span class="mut">@GardenState.FormatDate(p.At)</span>
+            </div>
+            <p>@p.Text</p>
+            <div class="row">
+                @foreach (var r in ReactionDefs)
+                {
+                    var cnt = reactions.Count(x => x.PostId == p.Id && x.Reaction == r.Key);
+                    var active = myReaction == r.Key;
+                    <button type="button" class="btn s @(active ? "p" : "")" @onclick="() => ToggleReactionAsync(p.Id, r.Key)">
+                        @r.Label @cnt
+                    </button>
+                }
+                <button type="button" class="btn s" @onclick="ReportAsync">Report</button>
+            </div>
+        </div>
+    }
+}
+
+@if (!string.IsNullOrEmpty(toastMsg))
+{
+    <div id="t"><div class="ts">@toastMsg</div></div>
+}
+
 @code {
-    private const string ClientIdKey = "cat-mood-garden:client-id";
+    private static readonly (string Key, string Label)[] ReactionDefs =
+    {
+        ("paw", "🐾 Support"),
+        ("hug", "🫂 Hug"),
+        ("grow", "🌱 Grow"),
+        ("love", "💗 Love")
+    };
 
     private List<WallPost> posts = new();
-    private string? clientId;
+    private List<WallReaction> reactions = new();
+    private UserProfile profile = new();
+    private string clientId = "";
 
-    private string author = "";
-    private string moodName = "Happy";
+    private string moodKey = "happy";
+    private int paws = 3;
     private string text = "";
-    private int paws;
-    private int hover;
-    private bool sortTop;
+    private string filter = "recent";
     private bool saving;
     private string? error;
+    private string? toastMsg;
 
-    private int Shown => hover > 0 ? hover : paws;
-
-    private List<WallPost> Feed => (sortTop
-        ? posts.OrderByDescending(p => p.Paws).ThenByDescending(p => p.At)
-        : posts.OrderByDescending(p => p.At)).ToList();
-
-    private static string PawLabel(int n) => n switch
+    private IEnumerable<WallPost> Feed
     {
-        1 => "Meh",
-        2 => "Okay",
-        3 => "Nice",
-        4 => "Great",
-        5 => "Purrfect!",
-        _ => "Tap to rate"
-    };
+        get
+        {
+            if (filter == "top")
+                return posts.OrderByDescending(p => reactions.Count(r => r.PostId == p.Id)).ThenByDescending(p => p.At);
+            if (filter != "recent")
+                return posts.Where(p => GardenState.Find(p.MoodName).Key == filter).OrderByDescending(p => p.At);
+            return posts.OrderByDescending(p => p.At);
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadPostsAsync();
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!firstRender) return;
-        clientId = await JS.InvokeAsync<string?>("garden.load", ClientIdKey);
-        if (string.IsNullOrWhiteSpace(clientId))
-        {
-            clientId = Guid.NewGuid().ToString();
-            await JS.InvokeVoidAsync("garden.save", ClientIdKey, clientId);
-        }
-        StateHasChanged();
-    }
-
-    private async Task LoadPostsAsync()
-    {
-        var response = await Supabase
-            .From<WallPost>()
-            .Where(x => x.DeletedAt == null)
-            .Order("at", Constants.Ordering.Descending)
-            .Get();
-
-        posts = response.Models;
-    }
-
-    private async Task PostVibeAsync()
-    {
-        if (saving) return;
-        if (paws == 0) { error = "Pick a paw rating first 🐾"; return; }
-        if (string.IsNullOrWhiteSpace(text)) { error = "Write a little comment first ✍️"; return; }
-
-        error = null;
-        saving = true;
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
         try
         {
+            clientId = await Profiles.GetClientIdAsync();
+            profile = await Profiles.GetOrCreateProfileAsync();
+            posts = await Walls.GetAllAsync();
+            reactions = await Walls.GetReactionsAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not load Vibe Wall: {ex.Message}";
+        }
+    }
+
+    private async Task PostAsync()
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            await ShowToastAsync("Write something first");
+            return;
+        }
+        saving = true;
+        error = null;
+        try
+        {
+            var mood = GardenState.Find(moodKey);
+            var authorName = string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Username : profile.DisplayName;
             var newPost = new WallPost
             {
                 ClientId = clientId,
-                Author = string.IsNullOrWhiteSpace(author) ? "Anonymous cat" : author.Trim(),
-                MoodName = moodName,
+                Author = string.IsNullOrWhiteSpace(authorName) ? "Alex" : authorName,
+                AvatarEmoji = string.IsNullOrWhiteSpace(profile.AvatarEmoji) ? "🐱" : profile.AvatarEmoji,
+                MoodName = mood.Name,
                 Paws = paws,
                 Text = text.Trim(),
                 At = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-
-            var response = await Supabase.From<WallPost>().Insert(newPost);
-            var created = response.Models.FirstOrDefault() ?? newPost;
+            var created = await Walls.AddAsync(newPost);
             posts.Insert(0, created);
-
-            paws = 0;
-            hover = 0;
             text = "";
+            await ShowToastAsync("Posted to the wall");
         }
         catch (Exception ex)
         {
-            error = $"Could not post right now: {ex.Message}";
+            error = $"Could not post: {ex.Message}";
         }
         finally
         {
@@ -250,23 +173,30 @@
         }
     }
 
-    private async Task SoftDeleteAsync(Guid id)
+    private async Task ToggleReactionAsync(Guid postId, string reactionKey)
     {
-        if (saving) return;
-        saving = true;
         try
         {
-            await Supabase
-                .From<WallPost>()
-                .Where(x => x.Id == id)
-                .Set(x => x.DeletedAt, DateTime.UtcNow)
-                .Update();
-
-            posts.RemoveAll(p => p.Id == id);
+            await Walls.ToggleReactionAsync(postId, clientId, reactionKey);
+            reactions = await Walls.GetReactionsAsync();
         }
-        finally
+        catch (Exception ex)
         {
-            saving = false;
+            error = $"Could not save reaction: {ex.Message}";
+        }
+    }
+
+    private Task ReportAsync() => ShowToastAsync("Reported. Thanks for keeping the wall kind 💗");
+
+    private async Task ShowToastAsync(string msg)
+    {
+        toastMsg = msg;
+        StateHasChanged();
+        await Task.Delay(3200);
+        if (toastMsg == msg)
+        {
+            toastMsg = null;
+            StateHasChanged();
         }
     }
 }

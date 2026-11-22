@@ -1,159 +1,329 @@
-﻿@page "/"
+@page "/"
 @rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
 @using MoodGarden.Client.Models
-@using Supabase.Postgrest
-@inherits GardenPageBase
-@inject Supabase.Client Supabase
-@inject IJSRuntime JS
+@using MoodGarden.Client.Services
+@inject PlantingService Plantings
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
 
-@{ var recent = plantings.Where(p => p.At >= DateTime.UtcNow.AddHours(-24)).ToList(); }
+@{
+    var streakDays = GardenState.CalculateStreak(plantings);
+    var topGroup = plantings.GroupBy(p => GardenState.Find(p.MoodName).Key).OrderByDescending(g => g.Count()).FirstOrDefault();
+    var topMood = topGroup is null ? null : GardenState.Find(topGroup.Key);
+    var hour = DateTime.Now.Hour;
+    var greeting = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+    var userName = string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Username : profile.DisplayName;
+    var equipped = ProfileService.ParseEquipped(profile);
+}
 
-<div class="flex flex-col h-full -m-6 md:-m-10">
-    <!-- Canvas -->
-    <div @ref="canvas" @onclick="PlantCat"
-         class="relative flex-grow min-h-[340px] bg-linear-to-br @SkyClass border-b-[3px] border-brand-dark overflow-hidden @(saving ? "cursor-wait" : "cursor-pointer")">
+<h1>Good @greeting, @userName! 🌷</h1>
+<p class="mut">@DateTime.Now.ToString("ddd MMM dd yyyy") · Your garden is growing beautifully.</p>
 
-        <!-- Sun / Moon -->
-        <div class="pointer-events-none select-none absolute top-28 md:top-6 right-6 text-[44px] animate-bob">@(IsNight ? "🌙" : "☀️")</div>
+<div class="row" style="margin:10px 0">
+    <span class="pill" style="background:var(--gr)">🐱 @plantings.Count cats</span>
+    <span class="pill" style="background:var(--yl)">🌿 @streakDays days tended</span>
+    <span class="pill" style="background:var(--pk)">Top mood: @(topMood is null ? "–" : $"{topMood.Emoji} {topMood.Name}")</span>
+    <button type="button" class="btn p s" @onclick="OpenPlantModal">+ Plant a Mood</button>
+</div>
 
-        <!-- Clouds -->
-        <div class="pointer-events-none absolute bg-white/90 border-2 border-brand-dark rounded-full w-[132px] h-[53px] top-[10%] animate-float-slow -left-[150px] @CloudFade"></div>
-        <div class="pointer-events-none absolute bg-white/90 border-2 border-brand-dark rounded-full w-[121px] h-[48px] top-[30%] animate-float-fast -left-[150px] @CloudFade"></div>
-        <div class="pointer-events-none absolute bg-white/90 border-2 border-brand-dark rounded-full w-[99px] h-[40px] top-[15%] animate-float-med -left-[150px] @CloudFade" style="animation-delay: 5s;"></div>
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
 
-        <!-- Hills -->
-        <div class="pointer-events-none absolute w-[150%] md:w-[900px] h-[300px] md:h-[400px] -left-[10%] md:-left-[200px] -bottom-[100px] md:top-[280px] bg-brand-green-dark border-[3px] border-brand-dark rounded-[100%] md:rounded-full"></div>
-        <div class="pointer-events-none absolute w-[150%] md:w-[1000px] h-[350px] md:h-[450px] -right-[20%] md:left-[450px] -bottom-[50px] md:top-[250px] bg-brand-green border-[3px] border-brand-dark rounded-[100%] md:rounded-full"></div>
+<div id="gd" class="@(profile.NightMode ? "n" : "")">
+    <span class="sun"></span>
+    <span class="cl"></span>
+    <span class="cl c2"></span>
 
-        <!-- Hint -->
-        <div class="pointer-events-none absolute left-1/2 -translate-x-1/2 top-5 z-[2000] flex items-center justify-center gap-2 px-6 py-3 bg-white border-[2.5px] border-brand-dark shadow-pop rounded-2xl font-bold text-sm text-brand-dark text-center w-[90%] md:w-auto transition-opacity duration-500 @(recent.Any() ? "opacity-0" : "opacity-100")">
-            💡 Tap anywhere in the garden to plant your mood!
-        </div>
+    @for (var i = 0; i < equipped.Count; i++)
+    {
+        var item = equipped[i];
+        var topPct = item == "🌳" ? 24 : (i % 2 == 1 ? 6 : 16);
+        <span class="dec" style="left:@(8 + i * 13)%;top:@(topPct)%">@item</span>
+    }
 
-        <!-- Counter -->
-        <div class="pointer-events-none absolute bottom-4 left-4 z-[2000] px-4 py-2 bg-white border-2 border-brand-dark rounded-full shadow-pop-sm font-bold text-xs text-brand-dark">
-            @(saving ? "🌱 Planting..." : $"🌱 {recent.Count} planted in the last 24h")
-        </div>
-
-        <!-- Planted cats -->
-        @foreach (var cat in recent)
+    <div class="gg">
+        @foreach (var c in plantings.OrderBy(p => p.At))
         {
-            var mood = GardenState.Find(cat.MoodName);
-            <div class="pointer-events-none absolute -translate-x-1/2 -translate-y-full origin-bottom"
-                 style="left:@(GardenState.Css(cat.X))%; top:@(GardenState.Css(cat.Y))%; z-index:@((int)(cat.Y * 10)); scale:@(GardenState.Css(0.75 + cat.Y / 100 * 0.4));">
-                <div class="flex flex-col items-center gap-0.5 animate-pop-in">
-                    <div class="animate-bob" style="animation-delay:-@(Delay(cat))ms;">
-                        <div class="flex justify-center items-center w-14 h-14 border-[3px] border-brand-dark shadow-pop rounded-full text-[28px] @mood.Bg">
-                            @cat.Emoji
-                        </div>
-                    </div>
-                    <div class="w-6 h-1.5 mt-1 bg-brand-brown border border-brand-dark rounded-full"></div>
-                </div>
-            </div>
+            var mood = GardenState.Find(c.MoodName);
+            var isSeedling = (DateTime.UtcNow - c.At).TotalSeconds < 3;
+            <button type="button" class="pl" title="@mood.Name" @onclick="() => selectedCat = c">
+                @(isSeedling ? "🌱" : mood.Emoji)
+            </button>
         }
-    </div>
-
-    <!-- Bottom Tray -->
-    <div class="shrink-0 flex flex-col items-center py-5 px-4 md:px-8 gap-3 bg-white">
-        <span class="font-display font-bold text-base md:text-lg text-brand-dark">How are you feeling right now? Pick a mood:</span>
-        <div class="flex flex-wrap justify-center gap-3 md:gap-4 w-full max-w-3xl">
-            @foreach (var mood in GardenState.Moods)
-            {
-                var selected = selectedName == mood.Name;
-                <button type="button"
-                        disabled="@saving"
-                        aria-pressed="@(selected ? "true" : "false")"
-                        class="flex flex-col items-center justify-center w-16 h-[68px] md:w-[72px] md:h-[76px] border-[2.5px] border-brand-dark rounded-2xl transition-all duration-100 hover:-translate-y-1 hover:shadow-pop active:translate-y-0.5 active:shadow-none disabled:opacity-60 @(selected ? $"{mood.Bg} shadow-pop -translate-y-1" : "bg-white")"
-                        @onclick="() => selectedName = mood.Name">
-                    <span class="text-[24px] md:text-[28px]">@mood.Emoji</span>
-                    <span class="text-[10px] md:text-[11px] font-bold text-brand-dark mt-1">@mood.Name</span>
-                </button>
-            }
-        </div>
-        <input type="text" maxlength="120" @bind="note" @bind:event="oninput" disabled="@saving"
-               placeholder="Add a little note for your diary (optional)…"
-               class="w-full max-w-xl px-5 py-2.5 bg-brand-light border-[2.5px] border-brand-dark rounded-full text-sm text-brand-dark placeholder:text-brand-gray focus:outline-none focus:bg-white focus:shadow-pop-sm disabled:opacity-60" />
+        @for (var i = 0; i < 6; i++)
+        {
+            <button type="button" class="pl e" aria-label="Plant here" @onclick="OpenPlantModal">+</button>
+        }
     </div>
 </div>
 
-@code {
-    private ElementReference canvas;
-    private List<Planting> plantings = new();
-    private string selectedName = "Happy";
-    private string note = "";
-    private int hour = 12;
-    private bool saving = false;
+<p class="mut">Tap an empty plot to plant. Cats grow in order, like a forest.</p>
 
-    private record Rect(double Left, double Top, double Width, double Height);
+<div class="card br">
+    <div class="bc"></div>
+    <div>
+        <h3>Take a slow breath</h3>
+        <p class="mut" style="margin:0">In for 4, out for 6. Longer exhales help the body settle.</p>
+    </div>
+</div>
 
-    private bool IsNight => hour is < 6 or >= 20;
-    private string CloudFade => IsNight ? "opacity-30" : "";
-    private string SkyClass => hour switch
+<div class="row">
+    @foreach (var m in GardenState.Moods)
     {
-        >= 6 and < 17 => "from-brand-grad-start to-brand-grad-end",
-        >= 17 and < 20 => "from-brand-dusk-start to-brand-dusk-end",
-        _ => "from-brand-night-start to-brand-night-end"
-    };
+        <span class="pill" style="background:@m.ColorHex">@m.Emoji @m.Name</span>
+    }
+</div>
 
-    private static int Delay(Planting p) => Math.Abs(p.Id.GetHashCode()) % 3000;
+@if (showPlantModal)
+{
+    <div class="ov" @onclick="CloseModals">
+        <div class="card md" @onclick:stopPropagation>
+            <h2>Plant a Mood 🌱</h2>
+            <div class="mp">
+                @foreach (var m in GardenState.Moods)
+                {
+                    var isSel = pickKey == m.Key;
+                    <button type="button" class="@(isSel ? "sel" : "")" style="background:@m.ColorHex" @onclick="() => pickKey = m.Key">
+                        <b>@m.Emoji</b>@m.Name<br /><span class="mut" style="font-weight:400">@m.Desc</span>
+                    </button>
+                }
+            </div>
+            <textarea class="mg-in" rows="3" maxlength="200" @bind="noteInput" placeholder="Optional note…"></textarea>
+            <div class="row" style="margin-top:10px">
+                <button type="button" class="btn p" disabled="@saving" @onclick="SaveNewPlantingAsync">@(saving ? "Saving..." : "Plant Cat")</button>
+                <button type="button" class="btn" @onclick="CloseModals">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (selectedCat is not null && !showEditModal && !showDeleteModal)
+{
+    var m = GardenState.Find(selectedCat.MoodName);
+    <div class="ov" @onclick="CloseModals">
+        <div class="card md" @onclick:stopPropagation>
+            <h2>@m.Emoji @m.Name</h2>
+            <p class="mut">Planted @GardenState.FormatDate(selectedCat.At)</p>
+            <p>@(string.IsNullOrWhiteSpace(selectedCat.Note) ? "No note" : selectedCat.Note)</p>
+            <div class="row">
+                <button type="button" class="btn s" @onclick="OpenEditModal">Edit</button>
+                <button type="button" class="btn s" @onclick="() => showDeleteModal = true">Delete</button>
+                <button type="button" class="btn s" @onclick="OpenInDiary">Open in diary</button>
+                <button type="button" class="btn s" @onclick="CloseModals">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (selectedCat is not null && showEditModal)
+{
+    <div class="ov" @onclick="CloseModals">
+        <div class="card md" @onclick:stopPropagation>
+            <h2>Edit entry</h2>
+            <div class="mp">
+                @foreach (var m in GardenState.Moods)
+                {
+                    var isSel = pickKey == m.Key;
+                    <button type="button" class="@(isSel ? "sel" : "")" style="background:@m.ColorHex" @onclick="() => pickKey = m.Key">
+                        <b>@m.Emoji</b>@m.Name
+                    </button>
+                }
+            </div>
+            <textarea class="mg-in" rows="3" maxlength="200" @bind="noteInput"></textarea>
+            <div class="row" style="margin-top:10px">
+                <button type="button" class="btn p" disabled="@saving" @onclick="SaveEditAsync">@(saving ? "Saving..." : "Save")</button>
+                <button type="button" class="btn" @onclick="CloseModals">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (selectedCat is not null && showDeleteModal)
+{
+    <div class="ov" @onclick="CloseModals">
+        <div class="card md" @onclick:stopPropagation>
+            <h2>Delete this entry?</h2>
+            <p>This removes the cat from your garden and diary.</p>
+            <div class="row">
+                <button type="button" class="btn p" disabled="@saving" @onclick="ConfirmDeleteAsync">@(saving ? "Deleting..." : "Delete")</button>
+                <button type="button" class="btn" @onclick="() => showDeleteModal = false">Keep</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(toastMsg))
+{
+    <div id="t"><div class="ts">@toastMsg</div></div>
+}
+
+@code {
+    private List<Planting> plantings = new();
+    private UserProfile profile = new();
+    private string? error;
+    private string? toastMsg;
+    private bool saving;
+
+    private bool showPlantModal;
+    private bool showEditModal;
+    private bool showDeleteModal;
+    private Planting? selectedCat;
+    private string? pickKey;
+    private string noteInput = "";
 
     protected override async Task OnInitializedAsync()
     {
-        await LoadPlantingsAsync();
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        await base.OnAfterRenderAsync(firstRender);
-        if (!firstRender) return;
-        hour = await JS.InvokeAsync<int>("garden.hour");
-        StateHasChanged();
-    }
-
-    private async Task LoadPlantingsAsync()
-    {
-        var response = await Supabase
-            .From<Planting>()
-            .Where(x => x.DeletedAt == null)
-            .Order("at", Constants.Ordering.Descending)
-            .Get();
-
-        plantings = response.Models;
-    }
-
-    private async Task PlantCat(MouseEventArgs e)
-    {
-        if (saving) return;
-
-        var r = await JS.InvokeAsync<Rect>("garden.getRect", canvas);
-        if (r.Width <= 0 || r.Height <= 0) return;
-
-        saving = true;
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
         try
         {
-            var x = Math.Clamp((e.ClientX - r.Left) / r.Width * 100, 4, 96);
-            var y = Math.Clamp((e.ClientY - r.Top) / r.Height * 100, 14, 100);
-            var mood = GardenState.Find(selectedName);
+            profile = await Profiles.GetOrCreateProfileAsync();
+            plantings = await Plantings.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not load garden from Supabase: {ex.Message}";
+        }
+    }
 
+    private void OpenPlantModal()
+    {
+        selectedCat = null;
+        showEditModal = false;
+        showDeleteModal = false;
+        pickKey = null;
+        noteInput = "";
+        showPlantModal = true;
+    }
+
+    private void OpenEditModal()
+    {
+        if (selectedCat is null) return;
+        pickKey = GardenState.Find(selectedCat.MoodName).Key;
+        noteInput = selectedCat.Note ?? "";
+        showEditModal = true;
+    }
+
+    private void CloseModals()
+    {
+        showPlantModal = false;
+        showEditModal = false;
+        showDeleteModal = false;
+        selectedCat = null;
+    }
+
+    private void OpenInDiary()
+    {
+        if (selectedCat is null) return;
+        var id = selectedCat.Id;
+        CloseModals();
+        Nav.NavigateTo($"diary?hl={id}");
+    }
+
+    private async Task SaveNewPlantingAsync()
+    {
+        if (string.IsNullOrEmpty(pickKey))
+        {
+            await ShowToastAsync("Pick a mood first");
+            return;
+        }
+        saving = true;
+        error = null;
+        try
+        {
+            var mood = GardenState.Find(pickKey);
+            var now = DateTime.UtcNow;
             var newPlanting = new Planting
             {
                 Emoji = mood.Emoji,
                 MoodName = mood.Name,
-                X = x,
-                Y = y,
-                At = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow,
-                Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim()
+                X = Random.Shared.Next(10, 90),
+                Y = Random.Shared.Next(35, 90),
+                At = now,
+                UpdatedAt = now,
+                Note = string.IsNullOrWhiteSpace(noteInput) ? null : noteInput.Trim()
             };
 
-            var response = await Supabase.From<Planting>().Insert(newPlanting);
-            var created = response.Models.FirstOrDefault() ?? newPlanting;
+            var created = await Plantings.AddAsync(newPlanting);
             plantings.Insert(0, created);
-            note = "";
+            CloseModals();
+
+            var suffix = mood.Score < 3
+                ? GardenState.KindMessages[Random.Shared.Next(GardenState.KindMessages.Length)]
+                : "🌷";
+            await ShowToastAsync($"{mood.Emoji} planted! {suffix}");
+        }
+        catch (Exception ex)
+        {
+            error = $"Save failed: {ex.Message}";
         }
         finally
         {
             saving = false;
+        }
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (selectedCat is null || string.IsNullOrEmpty(pickKey)) return;
+        saving = true;
+        error = null;
+        try
+        {
+            var mood = GardenState.Find(pickKey);
+            var cleaned = string.IsNullOrWhiteSpace(noteInput) ? null : noteInput.Trim();
+            await Plantings.UpdateEntryAsync(selectedCat.Id, mood.Emoji, mood.Name, cleaned);
+
+            selectedCat.Emoji = mood.Emoji;
+            selectedCat.MoodName = mood.Name;
+            selectedCat.Note = cleaned;
+            selectedCat.UpdatedAt = DateTime.UtcNow;
+            CloseModals();
+            await ShowToastAsync("Entry updated");
+        }
+        catch (Exception ex)
+        {
+            error = $"Update failed: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (selectedCat is null) return;
+        saving = true;
+        error = null;
+        try
+        {
+            await Plantings.SoftDeleteAsync(selectedCat.Id);
+            plantings.RemoveAll(p => p.Id == selectedCat.Id);
+            CloseModals();
+            await ShowToastAsync("Entry deleted");
+        }
+        catch (Exception ex)
+        {
+            error = $"Delete failed: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ShowToastAsync(string msg)
+    {
+        toastMsg = msg;
+        StateHasChanged();
+        await Task.Delay(3200);
+        if (toastMsg == msg)
+        {
+            toastMsg = null;
+            StateHasChanged();
         }
     }
 }

@@ -1,11 +1,18 @@
 using MoodGarden.Services;
+using MoodGarden.Client.Services;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
 using Supabase;
 
 var builder = WebAssemblyHostBuilder.CreateDefault(args);
 
-// (Keep your existing RootComponents / HttpClient registrations here if omitted from the snippet)
 builder.Services.AddScoped<GardenState>();
+builder.Services.AddScoped<MoodService>();
+builder.Services.AddScoped<PlantingService>();
+builder.Services.AddScoped<WallService>();
+builder.Services.AddScoped<StreakService>();
+builder.Services.AddScoped<ProfileService>();
+builder.Services.AddScoped<ReflectionService>();
+builder.Services.AddScoped<AuthService>();
 
 builder.Services.AddSingleton(sp =>
 {

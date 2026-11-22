@@ -1,38 +1,179 @@
-// Add at the top of Stats.razor:
+@page "/stats"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using System.Globalization
 @using MoodGarden.Client.Models
-@inject Supabase.Client Supabase
+@using MoodGarden.Client.Services
+@inject PlantingService Plantings
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
 
-// Replace `var myCount = Garden.Recent.Count;` with:
-    var myCount = recentPlantings.Count;
+<h1>Vibe Stats 📊</h1>
 
-// Update @code block:
+<div class="row" style="margin:10px 0">
+    @foreach (var r in Ranges)
+    {
+        <button type="button" class="btn s @(rangeDays == r.Days ? "p" : "")" @onclick="() => rangeDays = r.Days">@r.Label</button>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
+
+@{
+    var list = rangeDays == 0
+        ? plantings
+        : plantings.Where(p => p.At >= DateTime.UtcNow.AddDays(-rangeDays)).ToList();
+
+    var n = list.Count;
+    var counts = list
+        .GroupBy(p => GardenState.Find(p.MoodName).Key)
+        .ToDictionary(g => g.Key, g => g.Count());
+
+    var topKey = counts.OrderByDescending(kv => kv.Value).FirstOrDefault().Key;
+    var topMood = string.IsNullOrEmpty(topKey) ? null : GardenState.Find(topKey);
+    var streakDays = GardenState.CalculateStreak(plantings);
+    var avgScore = n > 0
+        ? list.Average(p => GardenState.Find(p.MoodName).Score).ToString("0.0", CultureInfo.InvariantCulture)
+        : "–";
+
+    var uniqueDays = list.Select(p => p.At.ToLocalTime().Date).Distinct().Count();
+
+    var gradientStops = new List<string>();
+    if (n > 0)
+    {
+        double acc = 0;
+        foreach (var m in GardenState.Moods)
+        {
+            if (!counts.TryGetValue(m.Key, out var cnt) || cnt == 0) continue;
+            var start = acc;
+            acc += (double)cnt / n * 100.0;
+            gradientStops.Add($"{m.ColorHex} {start.ToString("0.##", CultureInfo.InvariantCulture)}% {acc.ToString("0.##", CultureInfo.InvariantCulture)}%");
+        }
+    }
+    var conic = gradientStops.Count > 0 ? $"conic-gradient({string.Join(",", gradientStops)})" : "var(--bg)";
+
+    var weekdays = new int[7];
+    foreach (var p in list) weekdays[(int)p.At.ToLocalTime().DayOfWeek]++;
+    var maxWd = Math.Max(1, weekdays.Max());
+    const string dayLetters = "SMTWTFS";
+}
+
+<div class="g">
+    <div class="card">Check-ins<h2>@n</h2></div>
+    <div class="card">Top mood<h2>@(topMood is null ? "–" : $"{topMood.Emoji} {topMood.Name}")</h2></div>
+    <div class="card">Streak<h2>@streakDays 🔥</h2></div>
+    <div class="card">Avg mood (1–5)<h2>@avgScore</h2></div>
+</div>
+
+<div class="card">
+    <h3>Insights</h3>
+    <p>
+        @if (topMood is not null)
+        {
+            <a href="diary?mood=@topMood.Key" style="color:inherit;font-weight:700">@topMood.Name was your most recorded mood in this period →</a>
+        }
+        else
+        {
+            <span>Plant a cat to see insights.</span>
+        }
+    </p>
+    <p style="margin-bottom:0">You checked in on @uniqueDays @(uniqueDays == 1 ? "day" : "days") in this period.</p>
+</div>
+
+<div class="g">
+    <div class="card">
+        <h3>Mood distribution</h3>
+        <div class="dn" style="background:@conic;margin-top:10px"></div>
+        <div class="row" style="margin-top:10px">
+            @foreach (var m in GardenState.Moods.Where(m => counts.ContainsKey(m.Key)))
+            {
+                <span class="pill" style="background:@m.ColorHex">@m.Emoji @m.Name</span>
+            }
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>By weekday</h3>
+        <div class="row" style="align-items:flex-end;height:120px;flex-wrap:nowrap;margin-top:10px">
+            @for (var i = 0; i < 7; i++)
+            {
+                var hPx = (int)Math.Round(weekdays[i] * 90.0 / maxWd);
+                <div style="flex:1;text-align:center">
+                    <div style="height:@(hPx)px;background:var(--lv);border:2px solid var(--ln);border-radius:6px 6px 0 0"></div>
+                    @dayLetters[i]
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Mood calendar (28 days)</h3>
+    <div class="cal" style="margin-top:10px">
+        @for (var i = 0; i < 28; i++)
+        {
+            var day = DateTime.Today.AddDays(-(27 - i));
+            var last = plantings.Where(p => p.At.ToLocalTime().Date == day).OrderBy(p => p.At).LastOrDefault();
+            var m = last is null ? null : GardenState.Find(last.MoodName);
+            <i style="background:@(m is null ? "transparent" : m.ColorHex)" title="@day.ToString("MMM d, yyyy")">@(m?.Emoji ?? "")</i>
+        }
+    </div>
+</div>
+
+<div class="card">
+    <h3>Community comparison</h3>
+    <p class="mut">Aggregated community data — no individual entries shown.</p>
+    @foreach (var m in GardenState.Moods)
+    {
+        var comPct = CommunityRates.GetValueOrDefault(m.Key, 10);
+        var myPct = n > 0 ? (int)Math.Round(counts.GetValueOrDefault(m.Key, 0) * 100.0 / n) : 0;
+        var comW = Math.Min(100, comPct / 40.0 * 100.0).ToString("0.##", CultureInfo.InvariantCulture);
+        var myW = Math.Min(100, myPct / 40.0 * 100.0).ToString("0.##", CultureInfo.InvariantCulture);
+        <div class="row" style="flex-wrap:nowrap;margin-bottom:6px">
+            <span>@m.Emoji</span>
+            <div style="flex:1">
+                <div class="bar"><i style="width:@(comW)%"></i></div>
+                <div class="bar" style="margin-top:2px"><i style="width:@(myW)%;background:var(--pk)"></i></div>
+            </div>
+            <span class="mut">@comPct% / @myPct%</span>
+        </div>
+    }
+    <p class="mut" style="margin-bottom:0">Top bar: community · bottom bar: you</p>
+</div>
+
 @code {
-    private static readonly int[] globalValues = { 32, 8, 12, 48, 24, 15, 58, 18 };
-    private List<Planting> recentPlantings = new();
-    private bool showMine;
+    private static readonly (int Days, string Label)[] Ranges =
+    {
+        (7, "7 days"),
+        (30, "30 days"),
+        (90, "3 months"),
+        (0, "All time")
+    };
+
+    private static readonly Dictionary<string, int> CommunityRates = new()
+    {
+        ["happy"] = 22, ["calm"] = 20, ["tired"] = 16, ["anxious"] = 14,
+        ["excited"] = 10, ["sad"] = 8, ["lonely"] = 6, ["angry"] = 4
+    };
+
+    private List<Planting> plantings = new();
+    private int rangeDays = 30;
+    private string? error;
 
     protected override async Task OnInitializedAsync()
     {
-        var cutoff = DateTime.UtcNow.AddHours(-24);
-        var response = await Supabase
-            .From<Planting>()
-            .Where(x => x.DeletedAt == null && x.At >= cutoff)
-            .Get();
-
-        recentPlantings = response.Models;
-    }
-
-    private List<(Mood Mood, int Value)> Global =>
-        GardenState.Moods.Select((m, i) => (m, globalValues[i])).ToList();
-
-    private List<(Mood Mood, int Value)> Mine
-    {
-        get
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
+        try
         {
-            var total = Math.Max(recentPlantings.Count, 1);
-            return GardenState.Moods
-                .Select(m => (m, (int)Math.Round(100.0 * recentPlantings.Count(p => p.MoodName == m.Name) / total)))
-                .ToList();
+            await Profiles.GetOrCreateProfileAsync();
+            plantings = await Plantings.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not load stats from Supabase: {ex.Message}";
         }
     }
 }

@@ -1,0 +1,112 @@
+@page "/reflect"
+@rendermode @(new InteractiveWebAssemblyRenderMode(prerender: false))
+@using MoodGarden.Client.Models
+@using MoodGarden.Client.Services
+@inject ReflectionService Reflections
+@inject ProfileService Profiles
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<h1>Daily Reflection ✍️</h1>
+
+<div class="card">
+    <h2>@prompt</h2>
+    <textarea class="mg-in" rows="6" maxlength="1000" style="margin:10px 0" @bind="text" placeholder="Take your time…"></textarea>
+    <button type="button" class="btn p" disabled="@saving" @onclick="SaveAsync">@(saving ? "Saving..." : "Save reflection")</button>
+</div>
+
+@if (!string.IsNullOrEmpty(error))
+{
+    <div class="card" style="border-color:#dc2626;color:#dc2626;font-weight:700">@error</div>
+}
+
+<h3>Past reflections</h3>
+@if (reflections.Count == 0)
+{
+    <p class="mut">None yet.</p>
+}
+else
+{
+    @foreach (var r in reflections)
+    {
+        <div class="card">
+            <b>@r.Prompt</b>
+            <p>@r.Text</p>
+            <span class="mut">@GardenState.FormatDate(r.CreatedAt)</span>
+        </div>
+    }
+}
+
+@if (!string.IsNullOrEmpty(toastMsg))
+{
+    <div id="t"><div class="ts">@toastMsg</div></div>
+}
+
+@code {
+    private List<Reflection> reflections = new();
+    private string clientId = "";
+    private string prompt = GardenState.ReflectionPrompts[DateTime.Now.Day % GardenState.ReflectionPrompts.Length];
+    private string text = "";
+    private bool saving;
+    private string? error;
+    private string? toastMsg;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsSignedIn) { Nav.NavigateTo("login", replace: true); return; }
+        try
+        {
+            await Profiles.GetOrCreateProfileAsync();
+            clientId = await Profiles.GetClientIdAsync();
+            reflections = await Reflections.GetAllAsync(clientId);
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not load reflections: {ex.Message}";
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            await ShowToastAsync("Write a reflection first");
+            return;
+        }
+        saving = true;
+        error = null;
+        try
+        {
+            var created = await Reflections.AddAsync(new Reflection
+            {
+                ClientId = clientId,
+                Prompt = prompt,
+                Text = text.Trim(),
+                CreatedAt = DateTime.UtcNow
+            });
+            reflections.Insert(0, created);
+            text = "";
+            await ShowToastAsync("Reflection saved");
+        }
+        catch (Exception ex)
+        {
+            error = $"Could not save reflection: {ex.Message}";
+        }
+        finally
+        {
+            saving = false;
+        }
+    }
+
+    private async Task ShowToastAsync(string msg)
+    {
+        toastMsg = msg;
+        StateHasChanged();
+        await Task.Delay(3200);
+        if (toastMsg == msg)
+        {
+            toastMsg = null;
+            StateHasChanged();
+        }
+    }
+}
